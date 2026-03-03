@@ -305,3 +305,150 @@ export async function convertPRToPO(prId: string, supplierId: string) {
     return { success: false, error };
   }
 }
+
+// Get purchase requisitions
+export async function getPurchaseRequisitions(params?: {
+  status?: string;
+  prType?: string;
+  page?: number;
+  limit?: number;
+}) {
+  try {
+    if (!(await hasPermission(PERMISSIONS.PURCHASE_READ))) {
+      return { success: false, error: "Unauthorized" };
+    }
+
+    const { status, prType, page = 1, limit = 20 } = params || {};
+
+    const conditions: any[] = [];
+    if (status) {
+      conditions.push(eq(purchaseRequisitions.status, status as any));
+    }
+    if (prType) {
+      conditions.push(eq(purchaseRequisitions.prType, prType as any));
+    }
+
+    const query = conditions.length
+      ? db.select().from(purchaseRequisitions).where(and(...conditions))
+      : db.select().from(purchaseRequisitions);
+
+    const prs = await query
+      .orderBy(desc(purchaseRequisitions.createdAt))
+      .limit(limit)
+      .offset((page - 1) * limit);
+
+    return { success: true, data: prs };
+  } catch (error) {
+    console.error("Failed to get PRs:", error);
+    return { success: false, error };
+  }
+}
+
+// Get PR with items
+export async function getPurchaseRequisition(id: string) {
+  try {
+    if (!(await hasPermission(PERMISSIONS.PURCHASE_READ))) {
+      return { success: false, error: "Unauthorized" };
+    }
+
+    const [pr] = await db
+      .select()
+      .from(purchaseRequisitions)
+      .where(eq(purchaseRequisitions.id, id))
+      .limit(1);
+
+    if (!pr) {
+      return { success: false, error: "PR not found" };
+    }
+
+    const items = await db
+      .select()
+      .from(prItems)
+      .where(eq(prItems.prId, id));
+
+    return { success: true, data: { ...pr, items } };
+  } catch (error) {
+    console.error("Failed to get PR:", error);
+    return { success: false, error };
+  }
+}
+
+// Approve PR
+export async function approvePR(id: string) {
+  try {
+    const session = await auth();
+    if (!session?.user) {
+      return { success: false, error: "Unauthorized" };
+    }
+
+    if (!(await hasPermission(PERMISSIONS.PURCHASE_APPROVE))) {
+      return { success: false, error: "Unauthorized" };
+    }
+
+    await db
+      .update(purchaseRequisitions)
+      .set({
+        status: "approved",
+        notes: `Approved by ${session.user.name || session.user.id}`,
+        updatedAt: new Date(),
+      })
+      .where(eq(purchaseRequisitions.id, id));
+
+    revalidatePath("/purchase");
+    return { success: true };
+  } catch (error) {
+    console.error("Failed to approve PR:", error);
+    return { success: false, error };
+  }
+}
+
+// Reject PR
+export async function rejectPR(id: string, reason: string) {
+  try {
+    const session = await auth();
+    if (!session?.user) {
+      return { success: false, error: "Unauthorized" };
+    }
+
+    if (!(await hasPermission(PERMISSIONS.PURCHASE_APPROVE))) {
+      return { success: false, error: "Unauthorized" };
+    }
+
+    await db
+      .update(purchaseRequisitions)
+      .set({
+        status: "rejected",
+        notes: reason,
+        updatedAt: new Date(),
+      })
+      .where(eq(purchaseRequisitions.id, id));
+
+    revalidatePath("/purchase");
+    return { success: true };
+  } catch (error) {
+    console.error("Failed to reject PR:", error);
+    return { success: false, error };
+  }
+}
+
+// Get PR stats
+export async function getPRStats() {
+  try {
+    const allPRs = await db.select().from(purchaseRequisitions);
+
+    const stats = {
+      draft: allPRs.filter(p => p.status === "draft").length,
+      pending: allPRs.filter(p => p.status === "pending").length,
+      approved: allPRs.filter(p => p.status === "approved").length,
+      rejected: allPRs.filter(p => p.status === "rejected").length,
+      converted: allPRs.filter(p => p.status === "converted").length,
+      total: allPRs.length,
+      totalAmount: allPRs.reduce((sum, p) => sum + Number(p.totalAmount || 0), 0),
+    };
+
+    return { success: true, data: stats };
+  } catch (error) {
+    console.error("Failed to get PR stats:", error);
+    return { success: false, error };
+  }
+}

@@ -1560,3 +1560,9 @@ export const systemConfigsRelations = relations(systemConfigs, ({ one }) => ({
     references: [users.id],
   }),
 }));
+
+// ============================================================
+// PRD V2.0 产品主数据导出
+// ============================================================
+
+export * from "./schema-products";
