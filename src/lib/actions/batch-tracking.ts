@@ -273,7 +273,10 @@ export async function recordBatchUsage(data: {
       return { success: false, error: "Unauthorized" };
     }
 
-    const [log] = await db.insert(batchUsageLogs).values(data).returning();
+    const [log] = await db.insert(batchUsageLogs).values({
+      ...data,
+      unitCost: data.unitCost?.toString(),
+    }).returning();
 
     // Update batch remaining quantity
     await db.update(materialBatches)
