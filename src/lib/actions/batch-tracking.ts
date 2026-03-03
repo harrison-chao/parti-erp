@@ -292,7 +292,11 @@ export async function recordBatchUsage(data: {
     const newRemainingQty = batch.remainingQty - data.quantity;
     
     await db.update(materialBatches)
+    await db.update(materialBatches)
       .set({
+        remainingQty: newRemainingQty,
+      })
+      .where(eq(materialBatches.id, data.batchId));
         remainingQty: newRemainingQty,
       })
       .where(eq(materialBatches.id, data.batchId));
