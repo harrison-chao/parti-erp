@@ -278,10 +278,22 @@ export async function recordBatchUsage(data: {
       unitCost: data.unitCost?.toString(),
     }).returning();
 
+    // Get current batch
+    const [batch] = await db.select()
+      .from(materialBatches)
+      .where(eq(materialBatches.id, data.batchId))
+      .limit(1);
+
+    if (!batch) {
+      return { success: false, error: "Batch not found" };
+    }
+
     // Update batch remaining quantity
+    const newRemainingQty = batch.remainingQty - data.quantity;
+    
     await db.update(materialBatches)
       .set({
-        remainingQty: db.raw(`remaining_qty - ${data.quantity}`),
+        remainingQty: newRemainingQty,
         updatedAt: new Date(),
       })
       .where(eq(materialBatches.id, data.batchId));
