@@ -1,7 +1,7 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
-import { db } from "./db";
-import { sequenceCounters } from "./db/schema";
+import { db } from "@/db";
+import { sequenceCounters } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 
 export function cn(...inputs: ClassValue[]) {
