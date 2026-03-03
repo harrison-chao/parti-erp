@@ -274,7 +274,13 @@ export async function recordBatchUsage(data: {
     }
 
     const [log] = await db.insert(batchUsageLogs).values({
-      ...data,
+      batchId: data.batchId,
+      materialId: data.materialId,
+      usageType: data.usageType,
+      referenceType: data.referenceType,
+      referenceNo: data.referenceNo,
+      referenceId: data.referenceId,
+      quantity: data.quantity,
       unitCost: data.unitCost?.toString(),
     }).returning();
 
@@ -292,17 +298,8 @@ export async function recordBatchUsage(data: {
     const newRemainingQty = batch.remainingQty - data.quantity;
     
     await db.update(materialBatches)
-    await db.update(materialBatches)
       .set({
         remainingQty: newRemainingQty,
-      })
-      .where(eq(materialBatches.id, data.batchId));
-        remainingQty: newRemainingQty,
-      })
-      .where(eq(materialBatches.id, data.batchId));
-      .set({
-        remainingQty: newRemainingQty,
-        updatedAt: new Date(),
       })
       .where(eq(materialBatches.id, data.batchId));
 
