@@ -294,6 +294,10 @@ export async function recordBatchUsage(data: {
     await db.update(materialBatches)
       .set({
         remainingQty: newRemainingQty,
+      })
+      .where(eq(materialBatches.id, data.batchId));
+      .set({
+        remainingQty: newRemainingQty,
         updatedAt: new Date(),
       })
       .where(eq(materialBatches.id, data.batchId));
