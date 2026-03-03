@@ -120,23 +120,23 @@ export async function getPurchaseOrders(params?: {
     }
 
     const { status, supplierId, page = 1, limit = 20 } = params || {};
-    
-    let query = db.select({
-      po: purchaseOrders,
-      supplier: suppliers,
-    })
-    .from(purchaseOrders)
-    .leftJoin(suppliers, eq(purchaseOrders.supplierId, suppliers.id));
-    
+
+    const conditions = [];
     if (status) {
-      query = query.where(eq(purchaseOrders.status, status as any));
+      conditions.push(eq(purchaseOrders.status, status as any));
     }
-    
     if (supplierId) {
-      query = query.where(eq(purchaseOrders.supplierId, supplierId));
+      conditions.push(eq(purchaseOrders.supplierId, supplierId));
     }
-    
-    const results = await query
+
+    const results = await db
+      .select({
+        po: purchaseOrders,
+        supplier: suppliers,
+      })
+      .from(purchaseOrders)
+      .leftJoin(suppliers, eq(purchaseOrders.supplierId, suppliers.id))
+      .where(conditions.length > 0 ? and(...conditions) : undefined)
       .orderBy(desc(purchaseOrders.createdAt))
       .limit(limit)
       .offset((page - 1) * limit);
@@ -291,7 +291,7 @@ export async function convertPRToPO(prId: string, supplierId: string) {
         materialId: item.materialId!,
         materialCode: item.materialCode,
         materialName: item.materialName,
-        specification: item.specification,
+        specification: item.specification || undefined,
         quantity: item.suggestedQty,
         unitPrice: Number(item.unitPrice || 0),
         relatedPrId: prId,

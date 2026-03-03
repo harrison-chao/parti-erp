@@ -229,11 +229,11 @@ async function calculateDemands(horizonDays: number, materialIds?: string[]) {
   for (const inv of inventoryData) {
     if (materialIds && !materialIds.includes(inv.materialId!)) continue;
 
-    if (inv.qtyAvailable < inv.safetyStock) {
+    if (inv.qtyAvailable < (inv.safetyStock || 0)) {
       demands.push({
         materialId: inv.materialId,
         demandDate: new Date().toISOString().split("T")[0],
-        demandQty: Math.ceil(inv.safetyStock * 1.2 - inv.qtyAvailable), // 20% buffer
+        demandQty: Math.ceil((inv.safetyStock || 0) * 1.2 - inv.qtyAvailable), // 20% buffer
         demandType: "safety_stock",
         referenceType: null,
         referenceNo: null,
@@ -252,11 +252,14 @@ async function calculateSupplies(horizonDays: number, materialIds?: string[]) {
   endDate.setDate(endDate.getDate() + horizonDays);
 
   // 1. Current inventory
-  let inventoryQuery = db.select().from(inventory);
+  const inventoryConditions = [];
   if (materialIds) {
-    inventoryQuery = inventoryQuery.where(inArray(inventory.materialId, materialIds));
+    inventoryConditions.push(inArray(inventory.materialId, materialIds));
   }
-  const inventoryData = await inventoryQuery;
+  const inventoryData = await db
+    .select()
+    .from(inventory)
+    .where(inventoryConditions.length > 0 ? and(...inventoryConditions) : undefined);
 
   for (const inv of inventoryData) {
     supplies.push({
@@ -311,11 +314,15 @@ async function generateSuggestions(
   const suggestions: any[] = [];
 
   // Get all materials
-  let materialsQuery = db.select().from(materials);
+  const materialsConditions = [];
   if (materialIds) {
-    materialsQuery = materialsQuery.where(inArray(materials.id, materialIds));
+    materialsConditions.push(inArray(materials.id, materialIds));
   }
-  const materialsData = await materialsQuery;
+  const materialsData = await db
+    .select()
+    .from(materials)
+    .where(materialsConditions.length > 0 ? and(...materialsConditions) : undefined);
+
 
   for (const material of materialsData) {
     const materialDemands = demands.filter(d => d.materialId === material.id);

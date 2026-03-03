@@ -62,33 +62,19 @@ export async function getDealerApplications(params?: {
 
     const { status, page = 1, limit = 20 } = params || {};
     
-    const query = db.select().from(dealerApplications);
-    
+    let conditions = [];
     if (status) {
-      const applications = await query
-        .where(eq(dealerApplications.status, status))
-        .orderBy(desc(dealerApplications.createdAt))
-        .limit(limit)
-        .offset((page - 1) * limit);
-      return { success: true, data: applications };
+      conditions.push(eq(dealerApplications.status, status));
     }
     
-    const applications = await query
+    const applications = await db
+      .select()
+      .from(dealerApplications)
+      .where(conditions.length > 0 ? and(...conditions) : undefined)
       .orderBy(desc(dealerApplications.createdAt))
       .limit(limit)
       .offset((page - 1) * limit);
     
-
-    
-    if (status) {
-      query = query.where(eq(dealerApplications.status, status));
-    }
-    
-    const applications = await query
-      .orderBy(desc(dealerApplications.createdAt))
-      .limit(limit)
-      .offset((page - 1) * limit);
-
     return { success: true, data: applications };
   } catch (error) {
     console.error("Failed to get dealer applications:", error);
@@ -160,9 +146,9 @@ export async function updateApplicationStatus(
         contactPosition: application.contactPosition,
         priceTier: application.priceTierRequested || "C",
         settlementMethod: application.settlementMethodRequested || "prepaid",
-        creditLimit: 0,
-        creditBalance: 0,
-      }).returning();
+        creditLimit: "0",
+        creditBalance: "0",
+      } as any).returning();
 
       dealerId = dealer.id;
     }

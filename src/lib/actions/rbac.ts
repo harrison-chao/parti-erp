@@ -28,12 +28,18 @@ export const PERMISSIONS = {
   PRODUCTION_DELETE: "production:delete",
   PRODUCTION_CONFIRM: "production:confirm",
   
-  // Purchase
-  PURCHASE_READ: "purchase:read",
-  PURCHASE_CREATE: "purchase:create",
-  PURCHASE_UPDATE: "purchase:update",
-  PURCHASE_DELETE: "purchase:delete",
+// Purchase
+PURCHASE_READ: "purchase:read",
+PURCHASE_CREATE: "purchase:create",
+PURCHASE_UPDATE: "purchase:update",
+PURCHASE_DELETE: "purchase:delete",
   PURCHASE_APPROVE: "purchase:approve",
+  
+  // Suppliers
+  SUPPLIERS_READ: "suppliers:read",
+  SUPPLIERS_CREATE: "suppliers:create",
+  SUPPLIERS_UPDATE: "suppliers:update",
+  SUPPLIERS_DELETE: "suppliers:delete",
   
   // Inventory
   INVENTORY_READ: "inventory:read",
