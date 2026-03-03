@@ -62,7 +62,23 @@ export async function getDealerApplications(params?: {
 
     const { status, page = 1, limit = 20 } = params || {};
     
-    let query = db.select().from(dealerApplications);
+    const query = db.select().from(dealerApplications);
+    
+    if (status) {
+      const applications = await query
+        .where(eq(dealerApplications.status, status))
+        .orderBy(desc(dealerApplications.createdAt))
+        .limit(limit)
+        .offset((page - 1) * limit);
+      return { success: true, data: applications };
+    }
+    
+    const applications = await query
+      .orderBy(desc(dealerApplications.createdAt))
+      .limit(limit)
+      .offset((page - 1) * limit);
+    
+
     
     if (status) {
       query = query.where(eq(dealerApplications.status, status));
