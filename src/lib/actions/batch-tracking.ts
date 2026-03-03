@@ -50,8 +50,19 @@ export async function createBatch(data: {
 
     const [batch] = await db.insert(materialBatches).values({
       batchNo,
-      ...data,
+      materialId: data.materialId,
+      supplierId: data.supplierId,
+      grId: data.grId,
+      poId: data.poId,
+      productionDate: data.productionDate,
+      expiryDate: data.expiryDate,
+      initialQty: data.initialQty,
       remainingQty: data.initialQty,
+      unitCost: data.unitCost?.toString(),
+      warehouseId: data.warehouseId,
+      locationId: data.locationId,
+      qcReport: data.qcReport,
+      notes: data.notes,
       isActive: true,
     }).returning();
 
