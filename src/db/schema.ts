@@ -1476,8 +1476,7 @@ export const batchUsageLogsRelations = relations(batchUsageLogs, ({ one }) => ({
   }),
 }));
 
-export const warehousesRelations = relations(warehouses, ({ many }) => ({
-  locations: many(warehouseLocations),
+export const warehousesRelations = relations(warehouses, ({ many, one }) => ({
   manager: one(users, {
     fields: [warehouses.managerId],
     references: [users.id],
