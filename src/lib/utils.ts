@@ -1,13 +1,13 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { db } from "./db";
+import { sequenceCounters } from "./db/schema";
+import { eq, and } from "drizzle-orm";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-/**
- * Format currency in CNY
- */
 export function formatCurrency(amount: number | string): string {
   const num = typeof amount === "string" ? parseFloat(amount) : amount;
   return new Intl.NumberFormat("zh-CN", {
@@ -16,29 +16,47 @@ export function formatCurrency(amount: number | string): string {
   }).format(num);
 }
 
-/**
- * Format date to YYYY-MM-DD
- */
 export function formatDate(date: string | Date): string {
   const d = typeof date === "string" ? new Date(date) : date;
   return d.toISOString().split("T")[0];
 }
 
-/**
- * Generate document number: PREFIX-YYYYMMDD-XXXX
- */
-export function generateDocNo(prefix: string, seq: number): string {
+export async function generateDocNo(prefix: string): Promise<string> {
   const today = new Date();
   const dateStr =
     today.getFullYear().toString() +
     (today.getMonth() + 1).toString().padStart(2, "0") +
     today.getDate().toString().padStart(2, "0");
+
+  let counter = await db
+    .select()
+    .from(sequenceCounters)
+    .where(
+      and(
+        eq(sequenceCounters.prefix, prefix),
+        eq(sequenceCounters.dateKey, dateStr)
+      )
+    )
+    .limit(1);
+
+  let seq = 1;
+  if (counter.length > 0) {
+    seq = counter[0].currentSeq + 1;
+    await db
+      .update(sequenceCounters)
+      .set({ currentSeq: seq })
+      .where(eq(sequenceCounters.id, counter[0].id));
+  } else {
+    await db.insert(sequenceCounters).values({
+      prefix,
+      dateKey: dateStr,
+      currentSeq: 1,
+    });
+  }
+
   return `${prefix}-${dateStr}-${seq.toString().padStart(4, "0")}`;
 }
 
-/**
- * Status label mappings
- */
 export const SO_STATUS_MAP: Record<string, { label: string; color: string }> = {
   pending: { label: "待审核", color: "warning" },
   confirmed: { label: "已确认", color: "info" },

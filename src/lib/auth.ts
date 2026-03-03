@@ -1,33 +1,15 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { z } from "zod";
+import bcrypt from "bcryptjs";
+import { db } from "./db";
+import { users } from "./db/schema";
+import { eq } from "drizzle-orm";
 
 const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
 });
-
-// Demo mode: hardcoded users for initial deployment without DB
-// Replace with DB lookup once Neon is connected
-const DEMO_USERS = [
-  {
-    id: "1",
-    name: "管理员",
-    email: "admin@parti.com",
-    // bcrypt hash of "parti2024"
-    passwordHash:
-      "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy",
-    role: "admin",
-  },
-  {
-    id: "2",
-    name: "运营",
-    email: "ops@parti.com",
-    passwordHash:
-      "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy",
-    role: "operator",
-  },
-];
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   pages: {
@@ -55,8 +37,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     async authorized({ auth, request }) {
       const isLoggedIn = !!auth?.user;
       const isOnLogin = request.nextUrl.pathname.startsWith("/login");
+      const isOnRegister = request.nextUrl.pathname.startsWith("/register");
 
-      if (isOnLogin) {
+      if (isOnLogin || isOnRegister) {
         if (isLoggedIn) return Response.redirect(new URL("/", request.nextUrl));
         return true;
       }
@@ -77,20 +60,36 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         const { email, password } = parsed.data;
 
-        // Demo mode: simple comparison
-        // In production: use bcrypt.compare against DB
-        const user = DEMO_USERS.find((u) => u.email === email);
-        if (!user) return null;
+        try {
+          // Query user from database
+          const [user] = await db
+            .select()
+            .from(users)
+            .where(eq(users.email, email))
+            .limit(1);
 
-        // For demo, accept "parti2024" as password for all users
-        if (password !== "parti2024") return null;
+          if (!user || !user.isActive) return null;
 
-        return {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-        };
+          // Verify password
+          const isValid = await bcrypt.compare(password, user.passwordHash);
+          if (!isValid) return null;
+
+          // Update last login
+          await db
+            .update(users)
+            .set({ lastLoginAt: new Date() })
+            .where(eq(users.id, user.id));
+
+          return {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            role: user.role,
+          };
+        } catch (error) {
+          console.error("Auth error:", error);
+          return null;
+        }
       },
     }),
   ],

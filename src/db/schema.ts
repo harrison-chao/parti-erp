@@ -12,6 +12,7 @@ import {
   jsonb,
   serial,
   index,
+  unique,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
@@ -19,12 +20,29 @@ import { relations } from "drizzle-orm";
 // ENUMS
 // ============================================================
 
+// User Roles
+export const userRoleEnum = pgEnum("user_role", [
+  "admin",        // 超级管理员
+  "manager",      // 部门经理
+  "operator",     // 运营人员
+  "purchaser",    // 采购员
+  "warehouse",    // 仓管
+  "finance",      // 财务
+  "factory",      // 工厂人员
+]);
+
 // Dealer
 export const priceTierEnum = pgEnum("price_tier", ["A", "B", "C"]);
 export const settlementMethodEnum = pgEnum("settlement_method", [
   "prepaid",
   "deposit",
   "credit",
+]);
+export const dealerApplicationStatusEnum = pgEnum("dealer_application_status", [
+  "pending",
+  "reviewing",
+  "approved",
+  "rejected",
 ]);
 
 // Sales Order
@@ -128,6 +146,38 @@ export const approvalStatusEnum = pgEnum("approval_status", [
   "rejected",
 ]);
 
+// System Config
+export const configTypeEnum = pgEnum("config_type", [
+  "string",
+  "number",
+  "boolean",
+  "json",
+]);
+
+// ============================================================
+// RBAC - 权限管理系统
+// ============================================================
+
+export const roles = pgTable("roles", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: varchar("name", { length: 50 }).notNull().unique(),
+  description: text("description"),
+  permissions: jsonb("permissions").notNull().default("[]"), // ["dealers:read", "orders:write"]
+  isSystem: boolean("is_system").notNull().default(false), // 系统内置角色不可删除
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const permissions = pgTable("permissions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  code: varchar("code", { length: 100 }).notNull().unique(), // "dealers:create"
+  name: varchar("name", { length: 100 }).notNull(), // "创建经销商"
+  module: varchar("module", { length: 50 }).notNull(), // "dealers", "orders", "inventory"
+  description: text("description"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
 // ============================================================
 // USERS (for auth)
 // ============================================================
@@ -137,38 +187,103 @@ export const users = pgTable("users", {
   name: varchar("name", { length: 100 }).notNull(),
   email: varchar("email", { length: 255 }).notNull().unique(),
   passwordHash: text("password_hash").notNull(),
-  role: varchar("role", { length: 50 }).notNull().default("operator"),
+  role: userRoleEnum("role").notNull().default("operator"),
+  roleId: uuid("role_id").references(() => roles.id),
+  avatar: varchar("avatar", { length: 500 }),
+  phone: varchar("phone", { length: 30 }),
+  department: varchar("department", { length: 50 }), // 所属部门
   isActive: boolean("is_active").notNull().default(true),
+  lastLoginAt: timestamp("last_login_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
+
+export const userSessions = pgTable("user_sessions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  token: text("token").notNull(),
+  ipAddress: varchar("ip_address", { length: 45 }),
+  userAgent: text("user_agent"),
+  expiresAt: timestamp("expires_at").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// ============================================================
+// DEALER APPLICATIONS (经销商申请注册)
+// ============================================================
+
+export const dealerApplications = pgTable(
+  "dealer_applications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // 公司信息
+    companyName: varchar("company_name", { length: 200 }).notNull(),
+    businessLicense: varchar("business_license", { length: 100 }), // 营业执照号
+    // 联系人信息
+    contactName: varchar("contact_name", { length: 100 }).notNull(),
+    contactPhone: varchar("contact_phone", { length: 30 }).notNull(),
+    contactEmail: varchar("contact_email", { length: 255 }).notNull(),
+    contactPosition: varchar("contact_position", { length: 50 }), // 职位
+    // 申请信息
+    priceTierRequested: priceTierEnum("price_tier_requested").default("C"),
+    settlementMethodRequested: settlementMethodEnum("settlement_method_requested").default("prepaid"),
+    expectedMonthlyVolume: varchar("expected_monthly_volume", { length: 50 }), // 预期月采购量
+    mainBusiness: text("main_business"), // 主营业务描述
+    referralSource: varchar("referral_source", { length: 100 }), // 从哪里了解到Parti
+    // 状态
+    status: dealerApplicationStatusEnum("status").notNull().default("pending"),
+    reviewedBy: uuid("reviewed_by").references(() => users.id),
+    reviewedAt: timestamp("reviewed_at"),
+    reviewNotes: text("review_notes"),
+    // 关联
+    dealerId: uuid("dealer_id").references(() => dealers.id), // 审批通过后关联的经销商
+    // 时间戳
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_dealer_app_status").on(table.status),
+    index("idx_dealer_app_email").on(table.contactEmail),
+  ]
+);
 
 // ============================================================
 // DEALERS (经销商)
 // ============================================================
 
-export const dealers = pgTable("dealers", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  dealerId: varchar("dealer_id", { length: 20 }).notNull().unique(), // PARTI-D-XXXX
-  companyName: varchar("company_name", { length: 200 }).notNull(),
-  contactPerson: varchar("contact_person", { length: 100 }).notNull(),
-  contactPhone: varchar("contact_phone", { length: 30 }),
-  contactEmail: varchar("contact_email", { length: 255 }),
-  priceTier: priceTierEnum("price_tier").notNull().default("C"),
-  creditLimit: decimal("credit_limit", { precision: 12, scale: 2 })
-    .notNull()
-    .default("0"),
-  creditBalance: decimal("credit_balance", { precision: 12, scale: 2 })
-    .notNull()
-    .default("0"),
-  settlementMethod: settlementMethodEnum("settlement_method")
-    .notNull()
-    .default("prepaid"),
-  isActive: boolean("is_active").notNull().default(true),
-  notes: text("notes"),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+export const dealers = pgTable(
+  "dealers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    dealerId: varchar("dealer_id", { length: 20 }).notNull().unique(), // PARTI-D-XXXX
+    companyName: varchar("company_name", { length: 200 }).notNull(),
+    businessLicense: varchar("business_license", { length: 100 }),
+    contactPerson: varchar("contact_person", { length: 100 }).notNull(),
+    contactPhone: varchar("contact_phone", { length: 30 }),
+    contactEmail: varchar("contact_email", { length: 255 }),
+    contactPosition: varchar("contact_position", { length: 50 }),
+    priceTier: priceTierEnum("price_tier").notNull().default("C"),
+    creditLimit: decimal("credit_limit", { precision: 12, scale: 2 })
+      .notNull()
+      .default("0"),
+    creditBalance: decimal("credit_balance", { precision: 12, scale: 2 })
+      .notNull()
+      .default("0"),
+    settlementMethod: settlementMethodEnum("settlement_method")
+      .notNull()
+      .default("prepaid"),
+    isActive: boolean("is_active").notNull().default(true),
+    notes: text("notes"),
+    // 统计字段
+    totalOrders: integer("total_orders").default(0),
+    totalAmount: decimal("total_amount", { precision: 14, scale: 2 }).default("0"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [index("idx_dealer_id").on(table.dealerId)]
+);
 
 export const dealerAddresses = pgTable("dealer_addresses", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -182,6 +297,7 @@ export const dealerAddresses = pgTable("dealer_addresses", {
   city: varchar("city", { length: 50 }),
   district: varchar("district", { length: 50 }),
   address: text("address").notNull(),
+  zipCode: varchar("zip_code", { length: 20 }),
   isDefault: boolean("is_default").notNull().default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
@@ -268,6 +384,44 @@ export const materials = pgTable("materials", {
 });
 
 // ============================================================
+// BOM - 物料清单
+// ============================================================
+
+export const billOfMaterials = pgTable(
+  "bill_of_materials",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    variantId: uuid("variant_id")
+      .notNull()
+      .references(() => productVariants.id, { onDelete: "cascade" }),
+    version: integer("version").notNull().default(1),
+    isActive: boolean("is_active").notNull().default(true),
+    notes: text("notes"),
+    createdBy: uuid("created_by").references(() => users.id),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    unique("idx_bom_variant_version").on(table.variantId, table.version),
+  ]
+);
+
+export const bomItems = pgTable("bom_items", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  bomId: uuid("bom_id")
+    .notNull()
+    .references(() => billOfMaterials.id, { onDelete: "cascade" }),
+  materialId: uuid("material_id")
+    .notNull()
+    .references(() => materials.id),
+  quantity: decimal("quantity", { precision: 10, scale: 3 }).notNull(), // 单个产品所需数量
+  unit: varchar("unit", { length: 10 }).notNull(),
+  wastageRate: decimal("wastage_rate", { precision: 5, scale: 2 }).default("0"), // 损耗率
+  notes: text("notes"),
+  sortOrder: integer("sort_order").default(0),
+});
+
+// ============================================================
 // SUPPLIERS (供应商)
 // ============================================================
 
@@ -280,11 +434,38 @@ export const suppliers = pgTable("suppliers", {
   contactEmail: varchar("contact_email", { length: 255 }),
   paymentTerms: poPaymentTermsEnum("payment_terms").default("on_delivery"),
   leadTimeDays: integer("lead_time_days").default(7),
+  taxId: varchar("tax_id", { length: 50 }), // 税号
+  bankName: varchar("bank_name", { length: 100 }),
+  bankAccount: varchar("bank_account", { length: 50 }),
+  address: text("address"),
   notes: text("notes"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
+
+// 供应商-物料关联 (供应商可以供应哪些物料)
+export const supplierMaterials = pgTable(
+  "supplier_materials",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    supplierId: uuid("supplier_id")
+      .notNull()
+      .references(() => suppliers.id, { onDelete: "cascade" }),
+    materialId: uuid("material_id")
+      .notNull()
+      .references(() => materials.id, { onDelete: "cascade" }),
+    unitPrice: decimal("unit_price", { precision: 10, scale: 2 }),
+    moq: integer("moq").default(1), // 最小订购量
+    leadTimeDays: integer("lead_time_days"),
+    isPreferred: boolean("is_preferred").default(false), // 首选供应商
+    isActive: boolean("is_active").notNull().default(true),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    unique("idx_supplier_material").on(table.supplierId, table.materialId),
+  ]
+);
 
 // ============================================================
 // SALES ORDERS (销售订单)
@@ -314,11 +495,17 @@ export const salesOrders = pgTable(
     paidAmount: decimal("paid_amount", { precision: 12, scale: 2 })
       .notNull()
       .default("0"),
+    discountAmount: decimal("discount_amount", { precision: 12, scale: 2 }).default("0"),
     trackingNo: varchar("tracking_no", { length: 100 }),
     shippingName: varchar("shipping_name", { length: 100 }),
     shippingPhone: varchar("shipping_phone", { length: 30 }),
     shippingAddress: text("shipping_address"),
+    shippingProvince: varchar("shipping_province", { length: 50 }),
+    shippingCity: varchar("shipping_city", { length: 50 }),
     notes: text("notes"),
+    // 智能预测字段
+    estimatedCompletionDate: date("estimated_completion_date"), // AI预测完成日期
+    confidenceScore: decimal("confidence_score", { precision: 3, scale: 2 }), // 预测置信度
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
@@ -355,6 +542,7 @@ export const productionOrders = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     workOrderNo: varchar("work_order_no", { length: 30 }).notNull().unique(), // WO-YYYYMMDD-XXXX-NN
     salesOrderId: uuid("sales_order_id").references(() => salesOrders.id),
+    salesOrderItemId: uuid("sales_order_item_id").references(() => salesOrderItems.id),
     variantId: uuid("variant_id").references(() => productVariants.id),
     sku: varchar("sku", { length: 80 }).notNull(),
     productName: varchar("product_name", { length: 200 }).notNull(),
@@ -411,6 +599,7 @@ export const purchaseRequisitions = pgTable(
       .default("0"),
     relatedWoNo: varchar("related_wo_no", { length: 30 }), // if MRP triggered
     relatedSoNo: varchar("related_so_no", { length: 30 }), // for urgent reference
+    mrpRunId: uuid("mrp_run_id"), // MRP运行批次ID
     notes: text("notes"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -461,13 +650,20 @@ export const purchaseOrders = pgTable(
     status: poStatusEnum("status").notNull().default("draft"),
     purchaserId: uuid("purchaser_id").references(() => users.id),
     approvedBy: uuid("approved_by").references(() => users.id),
+    approvedAt: timestamp("approved_at"),
     totalAmount: decimal("total_amount", { precision: 12, scale: 2 })
       .notNull()
       .default("0"),
     paidAmount: decimal("paid_amount", { precision: 12, scale: 2 })
       .notNull()
       .default("0"),
+    taxRate: decimal("tax_rate", { precision: 5, scale: 2 }).default("13"), // 税率
+    taxAmount: decimal("tax_amount", { precision: 12, scale: 2 }).default("0"),
+    totalWithTax: decimal("total_with_tax", { precision: 12, scale: 2 }).default("0"),
+    currency: varchar("currency", { length: 3 }).default("CNY"),
+    exchangeRate: decimal("exchange_rate", { precision: 10, scale: 4 }).default("1"),
     notes: text("notes"),
+    terms: text("terms"), // 采购条款
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
@@ -482,20 +678,26 @@ export const poItems = pgTable("po_items", {
   poId: uuid("po_id")
     .notNull()
     .references(() => purchaseOrders.id, { onDelete: "cascade" }),
+  relatedPrId: uuid("related_pr_id").references(() => purchaseRequisitions.id),
   relatedPrNo: varchar("related_pr_no", { length: 30 }),
   materialId: uuid("material_id").references(() => materials.id),
   materialCode: varchar("material_code", { length: 50 }).notNull(),
   materialName: varchar("material_name", { length: 200 }),
+  specification: varchar("specification", { length: 100 }),
   quantity: integer("quantity").notNull(),
   unitPrice: decimal("unit_price", { precision: 10, scale: 2 }).notNull(),
-  taxRate: decimal("tax_rate", { precision: 5, scale: 2 }).default("0"),
+  taxRate: decimal("tax_rate", { precision: 5, scale: 2 }).default("13"),
+  lineAmount: decimal("line_amount", { precision: 12, scale: 2 }).notNull(),
+  lineTaxAmount: decimal("line_tax_amount", { precision: 12, scale: 2 }).default("0"),
   deliveryDate: date("delivery_date"),
   receivedQty: integer("received_qty").notNull().default(0),
   pendingQty: integer("pending_qty").notNull().default(0),
+  batchNo: varchar("batch_no", { length: 50 }), // 收货批次号
+  notes: text("notes"),
 });
 
 // ============================================================
-// GOODS RECEIPTS (入库单)
+// GOODS RECEIPTS (入库单) with Batch Tracking
 // ============================================================
 
 export const goodsReceipts = pgTable(
@@ -505,6 +707,7 @@ export const goodsReceipts = pgTable(
     grNo: varchar("gr_no", { length: 30 }).notNull().unique(), // GR-YYYYMMDD-XXXX
     grType: grTypeEnum("gr_type").notNull(),
     relatedDocNo: varchar("related_doc_no", { length: 30 }), // PO / WO / transfer doc
+    relatedDocId: uuid("related_doc_id"), // 关联单据ID
     supplierId: uuid("supplier_id").references(() => suppliers.id),
     receiptDate: date("receipt_date").notNull(),
     warehouseId: uuid("warehouse_id").references(() => warehouses.id),
@@ -536,6 +739,10 @@ export const grItems = pgTable("gr_items", {
   packagingSpec: varchar("packaging_spec", { length: 50 }),
   productionDate: date("production_date"),
   expiryDate: date("expiry_date"),
+  // QC 详细信息
+  qcPassedQty: integer("qc_passed_qty").default(0),
+  qcRejectedQty: integer("qc_rejected_qty").default(0),
+  qcRemark: text("qc_remark"),
 });
 
 // ============================================================
@@ -546,7 +753,9 @@ export const warehouses = pgTable("warehouses", {
   id: uuid("id").primaryKey().defaultRandom(),
   code: varchar("code", { length: 20 }).notNull().unique(),
   name: varchar("name", { length: 100 }).notNull(),
+  type: varchar("type", { length: 30 }).notNull().default("general"), // raw, finished, general
   address: text("address"),
+  managerId: uuid("manager_id").references(() => users.id),
   isActive: boolean("is_active").notNull().default(true),
 });
 
@@ -585,6 +794,7 @@ export const inventory = pgTable(
   (table) => [
     index("idx_inv_item").on(table.itemCode),
     index("idx_inv_warehouse").on(table.warehouseId),
+    index("idx_inv_batch").on(table.batchNo),
   ]
 );
 
@@ -604,6 +814,7 @@ export const inventoryTransactions = pgTable(
     qtyAfter: integer("qty_after").notNull(),
     referenceType: varchar("reference_type", { length: 10 }), // SO / WO / PO / GR
     referenceNo: varchar("reference_no", { length: 30 }),
+    referenceId: uuid("reference_id"),
     operatorId: uuid("operator_id").references(() => users.id),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     remark: text("remark"),
@@ -616,15 +827,236 @@ export const inventoryTransactions = pgTable(
 );
 
 // ============================================================
+// BATCH TRACKING - 批次追溯
+// ============================================================
+
+export const materialBatches = pgTable(
+  "material_batches",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    batchNo: varchar("batch_no", { length: 50 }).notNull().unique(),
+    materialId: uuid("material_id")
+      .notNull()
+      .references(() => materials.id),
+    supplierId: uuid("supplier_id").references(() => suppliers.id),
+    grId: uuid("gr_id").references(() => goodsReceipts.id), // 入库单ID
+    poId: uuid("po_id").references(() => purchaseOrders.id), // 采购订单ID
+    productionDate: date("production_date"),
+    expiryDate: date("expiry_date"),
+    initialQty: integer("initial_qty").notNull(),
+    remainingQty: integer("remaining_qty").notNull(),
+    unitCost: decimal("unit_cost", { precision: 10, scale: 2 }),
+    warehouseId: uuid("warehouse_id").references(() => warehouses.id),
+    locationId: uuid("location_id").references(() => warehouseLocations.id),
+    qcStatus: qcResultEnum("qc_status").default("inspect"),
+    qcReport: jsonb("qc_report"), // 质检报告
+    // 追溯链
+    parentBatchId: uuid("parent_batch_id").references((): any => materialBatches.id), // 父批次（调拨拆分）
+    traceCode: varchar("trace_code", { length: 100 }), // 追溯码/二维码
+    notes: text("notes"),
+    isActive: boolean("is_active").notNull().default(true),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_batch_material").on(table.materialId),
+    index("idx_batch_no").on(table.batchNo),
+    index("idx_batch_supplier").on(table.supplierId),
+  ]
+);
+
+// 批次使用记录 - 用于追溯
+export const batchUsageLogs = pgTable(
+  "batch_usage_logs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    batchId: uuid("batch_id")
+      .notNull()
+      .references(() => materialBatches.id),
+    materialId: uuid("material_id")
+      .notNull()
+      .references(() => materials.id),
+    usageType: varchar("usage_type", { length: 20 }).notNull(), // production, sales, transfer
+    referenceType: varchar("reference_type", { length: 10 }).notNull(), // WO, SO, GR
+    referenceNo: varchar("reference_no", { length: 30 }).notNull(),
+    referenceId: uuid("reference_id"),
+    quantity: integer("quantity").notNull(), // 使用数量
+    unitCost: decimal("unit_cost", { precision: 10, scale: 2 }), // 当时成本
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_batch_usage_batch").on(table.batchId),
+    index("idx_batch_usage_ref").on(table.referenceType, table.referenceNo),
+  ]
+);
+
+// ============================================================
+// MRP - 物料需求计划
+// ============================================================
+
+export const mrpRuns = pgTable(
+  "mrp_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    runNo: varchar("run_no", { length: 30 }).notNull().unique(), // MRP-YYYYMMDD-XXXX
+    runDate: timestamp("run_date").notNull().defaultNow(),
+    runBy: uuid("run_by").references(() => users.id),
+    horizonDays: integer("horizon_days").default(30), // 计划展望期
+    status: varchar("status", { length: 20 }).notNull().default("running"), // running, completed, failed
+    parameters: jsonb("parameters"), // 运行参数
+    results: jsonb("results"), // 运行结果摘要
+    createdPrs: integer("created_prs").default(0), // 生成的PR数量
+    errorMessage: text("error_message"),
+    completedAt: timestamp("completed_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [index("idx_mrp_run_date").on(table.runDate)]
+);
+
+// MRP 需求明细
+export const mrpDemands = pgTable(
+  "mrp_demands",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    mrpRunId: uuid("mrp_run_id")
+      .notNull()
+      .references(() => mrpRuns.id, { onDelete: "cascade" }),
+    materialId: uuid("material_id")
+      .notNull()
+      .references(() => materials.id),
+    demandDate: date("demand_date").notNull(),
+    demandQty: integer("demand_qty").notNull(),
+    demandType: varchar("demand_type", { length: 20 }).notNull(), // sales_order, production, safety_stock
+    referenceType: varchar("reference_type", { length: 10 }), // SO, WO
+    referenceNo: varchar("reference_no", { length: 30 }),
+    referenceId: uuid("reference_id"),
+  },
+  (table) => [
+    index("idx_mrp_demand_run").on(table.mrpRunId),
+    index("idx_mrp_demand_material").on(table.materialId),
+  ]
+);
+
+// MRP 供应明细
+export const mrpSupplies = pgTable(
+  "mrp_supplies",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    mrpRunId: uuid("mrp_run_id")
+      .notNull()
+      .references(() => mrpRuns.id, { onDelete: "cascade" }),
+    materialId: uuid("material_id")
+      .notNull()
+      .references(() => materials.id),
+    supplyDate: date("supply_date").notNull(),
+    supplyQty: integer("supply_qty").notNull(),
+    supplyType: varchar("supply_type", { length: 20 }).notNull(), // inventory, po, pr
+    referenceType: varchar("reference_type", { length: 10 }), // PO, PR, INV
+    referenceNo: varchar("reference_no", { length: 30 }),
+    referenceId: uuid("reference_id"),
+  },
+  (table) => [
+    index("idx_mrp_supply_run").on(table.mrpRunId),
+    index("idx_mrp_supply_material").on(table.materialId),
+  ]
+);
+
+// MRP 建议
+export const mrpSuggestions = pgTable(
+  "mrp_suggestions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    mrpRunId: uuid("mrp_run_id")
+      .notNull()
+      .references(() => mrpRuns.id, { onDelete: "cascade" }),
+    materialId: uuid("material_id")
+      .notNull()
+      .references(() => materials.id),
+    suggestionType: varchar("suggestion_type", { length: 20 }).notNull(), // purchase, expedite, cancel
+    suggestedQty: integer("suggested_qty").notNull(),
+    suggestedDate: date("suggested_date").notNull(),
+    reason: text("reason"),
+    priority: varchar("priority", { length: 10 }).default("normal"), // high, normal, low
+    isConverted: boolean("is_converted").default(false),
+    convertedPrId: uuid("converted_pr_id").references(() => purchaseRequisitions.id),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_mrp_sugg_run").on(table.mrpRunId),
+    index("idx_mrp_sugg_material").on(table.materialId),
+  ]
+);
+
+// ============================================================
+// DELIVERY PREDICTION - 交期智能预测
+// ============================================================
+
+export const deliveryPredictions = pgTable(
+  "delivery_predictions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    salesOrderId: uuid("sales_order_id").references(() => salesOrders.id),
+    workOrderId: uuid("work_order_id").references(() => productionOrders.id),
+    // 输入特征
+    productCategory: varchar("product_category", { length: 30 }),
+    sku: varchar("sku", { length: 80 }),
+    quantity: integer("quantity"),
+    complexity: integer("complexity").default(1), // 复杂度评分 1-5
+    // 预测结果
+    predictedDays: integer("predicted_days").notNull(), // 预测天数
+    confidenceScore: decimal("confidence_score", { precision: 3, scale: 2 }), // 置信度 0-1
+    predictionModel: varchar("prediction_model", { length: 50 }), // 使用的模型
+    // 时间戳
+    predictionDate: timestamp("prediction_date").notNull().defaultNow(),
+    actualDays: integer("actual_days"), // 实际天数（用于反馈优化）
+    isAccurate: boolean("is_accurate"), // 预测是否准确
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_pred_so").on(table.salesOrderId),
+    index("idx_pred_wo").on(table.workOrderId),
+  ]
+);
+
+// 历史生产数据 - 用于训练预测模型
+export const productionHistory = pgTable(
+  "production_history",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workOrderId: uuid("work_order_id").references(() => productionOrders.id),
+    sku: varchar("sku", { length: 80 }).notNull(),
+    productCategory: varchar("product_category", { length: 30 }),
+    quantity: integer("quantity").notNull(),
+    complexity: integer("complexity").default(1),
+    // 各环节耗时
+    cuttingHours: decimal("cutting_hours", { precision: 6, scale: 2 }),
+    drillingHours: decimal("drilling_hours", { precision: 6, scale: 2 }),
+    surfaceTreatHours: decimal("surface_treat_hours", { precision: 6, scale: 2 }),
+    assemblingHours: decimal("assembling_hours", { precision: 6, scale: 2 }),
+    qcHours: decimal("qc_hours", { precision: 6, scale: 2 }),
+    totalHours: decimal("total_hours", { precision: 6, scale: 2 }),
+    // 时间
+    startDate: date("start_date"),
+    completionDate: date("completion_date"),
+    actualDays: integer("actual_days"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    index("idx_prod_hist_sku").on(table.sku),
+    index("idx_prod_hist_category").on(table.productCategory),
+  ]
+);
+
+// ============================================================
 // APPROVAL RULES & LOGS (审批)
 // ============================================================
 
 export const approvalRules = pgTable("approval_rules", {
   id: uuid("id").primaryKey().defaultRandom(),
-  entityType: varchar("entity_type", { length: 10 }).notNull(), // PR / PO
+  entityType: varchar("entity_type", { length: 10 }).notNull(), // PR / PO / SO
   minAmount: decimal("min_amount", { precision: 12, scale: 2 }).notNull(),
   maxAmount: decimal("max_amount", { precision: 12, scale: 2 }).notNull(),
-  approverRole: varchar("approver_role", { length: 50 }).notNull(), // manager / finance / ceo
+  approverRole: userRoleEnum("approver_role").notNull(),
+  approverUserId: uuid("approver_user_id").references(() => users.id),
   isActive: boolean("is_active").notNull().default(true),
 });
 
@@ -659,23 +1091,102 @@ export const workflowLogs = pgTable(
 );
 
 // ============================================================
+// SYSTEM CONFIG - 系统配置
+// ============================================================
+
+export const systemConfigs = pgTable(
+  "system_configs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    key: varchar("key", { length: 100 }).notNull().unique(),
+    value: text("value").notNull(),
+    type: configTypeEnum("type").notNull().default("string"),
+    description: text("description"),
+    isEditable: boolean("is_editable").notNull().default(true),
+    updatedBy: uuid("updated_by").references(() => users.id),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [index("idx_config_key").on(table.key)]
+);
+
+// 默认系统配置
+export const DEFAULT_SYSTEM_CONFIGS = {
+  "company.name": "边缘智造",
+  "company.address": "",
+  "company.phone": "",
+  "company.email": "contact@parti.com",
+  "order.prefix.so": "SO",
+  "order.prefix.wo": "WO",
+  "order.prefix.pr": "PR",
+  "order.prefix.po": "PO",
+  "order.prefix.gr": "GR",
+  "mrp.default_horizon": "30",
+  "mrp.safety_stock_multiplier": "1.2",
+  "inventory.low_stock_threshold": "10",
+  "prediction.confidence_threshold": "0.75",
+  "auth.session_timeout": "24",
+};
+
+// ============================================================
 // SEQUENCE COUNTERS (单号生成)
 // ============================================================
 
-export const sequenceCounters = pgTable("sequence_counters", {
-  id: serial("id").primaryKey(),
-  prefix: varchar("prefix", { length: 10 }).notNull(), // SO / WO / PR / PO / GR
-  dateKey: varchar("date_key", { length: 8 }).notNull(), // YYYYMMDD
-  currentSeq: integer("current_seq").notNull().default(0),
-});
+export const sequenceCounters = pgTable(
+  "sequence_counters",
+  {
+    id: serial("id").primaryKey(),
+    prefix: varchar("prefix", { length: 10 }).notNull(), // SO / WO / PR / PO / GR
+    dateKey: varchar("date_key", { length: 8 }).notNull(), // YYYYMMDD
+    currentSeq: integer("current_seq").notNull().default(0),
+  },
+  (table) => [unique("idx_seq_prefix_date").on(table.prefix, table.dateKey)]
+);
 
 // ============================================================
 // RELATIONS
 // ============================================================
 
+export const rolesRelations = relations(roles, ({ many }) => ({
+  users: many(users),
+}));
+
+export const usersRelations = relations(users, ({ one, many }) => ({
+  role: one(roles, {
+    fields: [users.roleId],
+    references: [roles.id],
+  }),
+  sessions: many(userSessions),
+  salesOrdersReviewed: many(salesOrders),
+  purchaseOrdersApproved: many(purchaseOrders),
+  purchaseRequisitionsRequested: many(purchaseRequisitions),
+}));
+
+export const userSessionsRelations = relations(userSessions, ({ one }) => ({
+  user: one(users, {
+    fields: [userSessions.userId],
+    references: [users.id],
+  }),
+}));
+
+export const dealerApplicationsRelations = relations(
+  dealerApplications,
+  ({ one }) => ({
+    reviewer: one(users, {
+      fields: [dealerApplications.reviewedBy],
+      references: [users.id],
+    }),
+    dealer: one(dealers, {
+      fields: [dealerApplications.dealerId],
+      references: [dealers.id],
+    }),
+  })
+);
+
 export const dealersRelations = relations(dealers, ({ many }) => ({
   addresses: many(dealerAddresses),
   salesOrders: many(salesOrders),
+  applications: many(dealerApplications),
 }));
 
 export const dealerAddressesRelations = relations(
@@ -699,6 +1210,7 @@ export const salesOrdersRelations = relations(salesOrders, ({ one, many }) => ({
   }),
   items: many(salesOrderItems),
   productionOrders: many(productionOrders),
+  deliveryPrediction: one(deliveryPredictions),
 }));
 
 export const salesOrderItemsRelations = relations(
@@ -722,6 +1234,10 @@ export const productionOrdersRelations = relations(
       fields: [productionOrders.salesOrderId],
       references: [salesOrders.id],
     }),
+    salesOrderItem: one(salesOrderItems, {
+      fields: [productionOrders.salesOrderItemId],
+      references: [salesOrderItems.id],
+    }),
     variant: one(productVariants, {
       fields: [productionOrders.variantId],
       references: [productVariants.id],
@@ -731,6 +1247,7 @@ export const productionOrdersRelations = relations(
       references: [users.id],
     }),
     processLogs: many(woProcessLogs),
+    productionHistory: one(productionHistory),
   })
 );
 
@@ -744,6 +1261,16 @@ export const woProcessLogsRelations = relations(woProcessLogs, ({ one }) => ({
     references: [users.id],
   }),
 }));
+
+export const productionHistoryRelations = relations(
+  productionHistory,
+  ({ one }) => ({
+    workOrder: one(productionOrders, {
+      fields: [productionHistory.workOrderId],
+      references: [productionOrders.id],
+    }),
+  })
+);
 
 export const purchaseRequisitionsRelations = relations(
   purchaseRequisitions,
@@ -799,6 +1326,10 @@ export const poItemsRelations = relations(poItems, ({ one }) => ({
     fields: [poItems.materialId],
     references: [materials.id],
   }),
+  pr: one(purchaseRequisitions, {
+    fields: [poItems.relatedPrId],
+    references: [purchaseRequisitions.id],
+  }),
 }));
 
 export const goodsReceiptsRelations = relations(
@@ -844,7 +1375,7 @@ export const productTemplatesRelations = relations(
 
 export const productVariantsRelations = relations(
   productVariants,
-  ({ one }) => ({
+  ({ one, many }) => ({
     template: one(productTemplates, {
       fields: [productVariants.templateId],
       references: [productTemplates.id],
@@ -853,5 +1384,180 @@ export const productVariantsRelations = relations(
       fields: [productVariants.surfaceTreatmentId],
       references: [surfaceTreatments.id],
     }),
+    boms: many(billOfMaterials),
   })
 );
+
+export const billOfMaterialsRelations = relations(
+  billOfMaterials,
+  ({ one, many }) => ({
+    variant: one(productVariants, {
+      fields: [billOfMaterials.variantId],
+      references: [productVariants.id],
+    }),
+    createdByUser: one(users, {
+      fields: [billOfMaterials.createdBy],
+      references: [users.id],
+    }),
+    items: many(bomItems),
+  })
+);
+
+export const bomItemsRelations = relations(bomItems, ({ one }) => ({
+  bom: one(billOfMaterials, {
+    fields: [bomItems.bomId],
+    references: [billOfMaterials.id],
+  }),
+  material: one(materials, {
+    fields: [bomItems.materialId],
+    references: [materials.id],
+  }),
+}));
+
+export const suppliersRelations = relations(suppliers, ({ many }) => ({
+  materials: many(supplierMaterials),
+  purchaseOrders: many(purchaseOrders),
+}));
+
+export const supplierMaterialsRelations = relations(
+  supplierMaterials,
+  ({ one }) => ({
+    supplier: one(suppliers, {
+      fields: [supplierMaterials.supplierId],
+      references: [suppliers.id],
+    }),
+    material: one(materials, {
+      fields: [supplierMaterials.materialId],
+      references: [materials.id],
+    }),
+  })
+);
+
+export const materialsRelations = relations(materials, ({ many }) => ({
+  suppliers: many(supplierMaterials),
+  batches: many(materialBatches),
+}));
+
+export const materialBatchesRelations = relations(
+  materialBatches,
+  ({ one, many }) => ({
+    material: one(materials, {
+      fields: [materialBatches.materialId],
+      references: [materials.id],
+    }),
+    supplier: one(suppliers, {
+      fields: [materialBatches.supplierId],
+      references: [suppliers.id],
+    }),
+    gr: one(goodsReceipts, {
+      fields: [materialBatches.grId],
+      references: [goodsReceipts.id],
+    }),
+    warehouse: one(warehouses, {
+      fields: [materialBatches.warehouseId],
+      references: [warehouses.id],
+    }),
+    usageLogs: many(batchUsageLogs),
+    parentBatch: one(materialBatches, {
+      fields: [materialBatches.parentBatchId],
+      references: [materialBatches.id],
+    }),
+  })
+);
+
+export const batchUsageLogsRelations = relations(batchUsageLogs, ({ one }) => ({
+  batch: one(materialBatches, {
+    fields: [batchUsageLogs.batchId],
+    references: [materialBatches.id],
+  }),
+  material: one(materials, {
+    fields: [batchUsageLogs.materialId],
+    references: [materials.id],
+  }),
+}));
+
+export const warehousesRelations = relations(warehouses, ({ many }) => ({
+  locations: many(warehouseLocations),
+  manager: one(users, {
+    fields: [warehouses.managerId],
+    references: [users.id],
+  }),
+}));
+
+export const warehouseLocationsRelations = relations(
+  warehouseLocations,
+  ({ one }) => ({
+    warehouse: one(warehouses, {
+      fields: [warehouseLocations.warehouseId],
+      references: [warehouses.id],
+    }),
+  })
+);
+
+export const deliveryPredictionsRelations = relations(
+  deliveryPredictions,
+  ({ one }) => ({
+    salesOrder: one(salesOrders, {
+      fields: [deliveryPredictions.salesOrderId],
+      references: [salesOrders.id],
+    }),
+    workOrder: one(productionOrders, {
+      fields: [deliveryPredictions.workOrderId],
+      references: [productionOrders.id],
+    }),
+  })
+);
+
+export const mrpRunsRelations = relations(mrpRuns, ({ one, many }) => ({
+  runByUser: one(users, {
+    fields: [mrpRuns.runBy],
+    references: [users.id],
+  }),
+  demands: many(mrpDemands),
+  supplies: many(mrpSupplies),
+  suggestions: many(mrpSuggestions),
+}));
+
+export const mrpDemandsRelations = relations(mrpDemands, ({ one }) => ({
+  mrpRun: one(mrpRuns, {
+    fields: [mrpDemands.mrpRunId],
+    references: [mrpRuns.id],
+  }),
+  material: one(materials, {
+    fields: [mrpDemands.materialId],
+    references: [materials.id],
+  }),
+}));
+
+export const mrpSuppliesRelations = relations(mrpSupplies, ({ one }) => ({
+  mrpRun: one(mrpRuns, {
+    fields: [mrpSupplies.mrpRunId],
+    references: [mrpRuns.id],
+  }),
+  material: one(materials, {
+    fields: [mrpSupplies.materialId],
+    references: [materials.id],
+  }),
+}));
+
+export const mrpSuggestionsRelations = relations(mrpSuggestions, ({ one }) => ({
+  mrpRun: one(mrpRuns, {
+    fields: [mrpSuggestions.mrpRunId],
+    references: [mrpRuns.id],
+  }),
+  material: one(materials, {
+    fields: [mrpSuggestions.materialId],
+    references: [materials.id],
+  }),
+  convertedPr: one(purchaseRequisitions, {
+    fields: [mrpSuggestions.convertedPrId],
+    references: [purchaseRequisitions.id],
+  }),
+}));
+
+export const systemConfigsRelations = relations(systemConfigs, ({ one }) => ({
+  updatedByUser: one(users, {
+    fields: [systemConfigs.updatedBy],
+    references: [users.id],
+  }),
+}));
